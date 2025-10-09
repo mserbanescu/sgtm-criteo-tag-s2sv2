@@ -82,6 +82,7 @@ ___TEMPLATE_PARAMETERS___
 ___SANDBOXED_JS_FOR_SERVER___
 
 // Imports
+const encodeUriComponent = require('encodeUriComponent');
 const sendHttpRequest = require('sendHttpRequest');
 const getAllEventData = require('getAllEventData');
 const getEventData = require('getEventData');
@@ -103,8 +104,7 @@ const mappingId = data.applicationId + '.' + getEventData('event_name');
 
 var criteoFirstPartyUserId = getCookieValues(COOKIE_NAME)[0];
 
-const urlToCall = 'https://sslwidget.criteo.com/fpm/event?mappingId=' + mappingId + '&first_party_id='+ criteoFirstPartyUserId + '&first_party_domain=' + domain;
-
+const urlToCall = 'https://sslwidget.criteo.com/fpm/event' + '?mappingId=' + encodeUriComponent(mappingId) + '&first_party_id=' + encodeUriComponent(criteoFirstPartyUserId) + '&first_party_domain=' + encodeUriComponent(domain);
 
 const postBodyData = getAllEventData();
 postBodyData.partner_id = data.partnerId;
@@ -390,6 +390,6 @@ setup: |-
 
 ___NOTES___
 
-Created on 31/01/2022, 10:59:56
+Created on 31/01/2025, 10:59:56
 
 
