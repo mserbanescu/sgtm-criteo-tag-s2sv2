@@ -94,15 +94,19 @@ const logToConsole = require('logToConsole');
 
 
 // Constants (do not forget to update the version)
-const tagVersion = 'criteo_sgtm_s2sv2_0.0.1';
+const tagVersion = 'criteo_sgtm_s2sv2_0.0.2';
 const COOKIE_NAME = "crto_fpid";
-const domain = parseUrl(getRequestHeader('referer')).hostname;
+
+// Use the host of the page the event was sent from before falling back to the referer,
+// the same way the client template resolves the domain the first party id is registered with.
+// The referer alone is not reliable: hits sent through the Google tag service worker carry the sGTM host.
+const domain = getHostname(getEventData('page_location')) || getHostname(getRequestHeader('referer')) || '';
 
 // Implementation
 const postHeaders = {'Content-Type': 'application/json'};
 const mappingId = data.applicationId + '.' + getEventData('event_name');
 
-var criteoFirstPartyUserId = getCookieValues(COOKIE_NAME)[0];
+var criteoFirstPartyUserId = getCookieValues(COOKIE_NAME)[0] || '';
 
 const urlToCall = 'https://sslwidget.criteo.com/fpm/event' + '?mappingId=' + encodeUriComponent(mappingId) + '&first_party_id=' + encodeUriComponent(criteoFirstPartyUserId) + '&first_party_domain=' + encodeUriComponent(domain);
 
@@ -118,6 +122,12 @@ const postBody = JSON.stringify(postBodyData);
 
 // Fire
 callWidget(urlToCall, 0);
+
+function getHostname(url) {
+  if (!url) return undefined;
+  const parsedUrl = parseUrl(url);
+  return parsedUrl ? parsedUrl.hostname : undefined;
+}
 
 function callWidget(widgetUrl, redirectLvl) {
     if (redirectLvl > 5) {
@@ -298,6 +308,44 @@ scenarios:
     // Verify that the tag finished successfully.
     assertApi('sendHttpRequest').wasCalledWith(urlToCall, actualSuccessCallback, headers, JSON.stringify(expectedData));
     assertApi('gtmOnSuccess').wasCalled();
+- name: page_location host is used before the referer (service worker hits)
+  code: |2-
+
+    mock('getEventData', (fieldName) => {
+      if(fieldName === 'event_name') return 'page_view';
+      if(fieldName === 'page_location') return pageLocation;
+    });
+    mock('getRequestHeader', (component) => {
+      if (component === 'referer') return serviceWorkerReferer;
+      return "";
+    });
+
+    runCode(mockConfiguration);
+
+    assertThat(actualUrl).isEqualTo('https://sslwidget.criteo.com/fpm/event?mappingId=com.test.sgtm.page_view&first_party_id=test-fpid-12345&first_party_domain=www.page-domain.com');
+    assertApi('gtmOnSuccess').wasCalled();
+- name: no page_location and no referer, event is still sent without domain
+  code: |2-
+
+    mock('getRequestHeader', (component) => {
+      return undefined;
+    });
+
+    runCode(mockConfiguration);
+
+    assertThat(actualUrl).isEqualTo('https://sslwidget.criteo.com/fpm/event?mappingId=com.test.sgtm.page_view&first_party_id=test-fpid-12345&first_party_domain=');
+    assertApi('gtmOnSuccess').wasCalled();
+- name: no crto_fpid cookie, event is sent with an empty first party id
+  code: |2-
+
+    mock('getCookieValues', (cookieName) => {
+      return [];
+    });
+
+    runCode(mockConfiguration);
+
+    assertThat(actualUrl).isEqualTo('https://sslwidget.criteo.com/fpm/event?mappingId=com.test.sgtm.page_view&first_party_id=&first_party_domain=test-domain.com');
+    assertApi('gtmOnSuccess').wasCalled();
 setup: |-
   const JSON = require('JSON');
 
@@ -326,7 +374,7 @@ setup: |-
       "ip_override": "fake_ip",
       "user_agent": "ua",
       "partner_id": "1234",
-      "version":"criteo_sgtm_s2sv2_0.0.1",
+      "version":"criteo_sgtm_s2sv2_0.0.2",
       "an":"com.test.sgtm",
       "cn":"FR",
       "ln":"fr"
@@ -374,14 +422,24 @@ setup: |-
       return "";
   });
 
+  const pageLocation = 'https://www.page-domain.com/form/step-2';
+  const serviceWorkerReferer = 'https://sgtm.page-domain.com/_/service_worker/69f0/sw.js?origin=https%3A%2F%2Fwww.page-domain.com';
+
   mock('parseUrl', (url) => {
       if (url === 'test-domain.com/something') {
           return mockUrlObject;
       }
+      if (url === pageLocation) {
+          return {hostname: 'www.page-domain.com'};
+      }
+      if (url === serviceWorkerReferer) {
+          return {hostname: 'sgtm.page-domain.com'};
+      }
   });
 
-  let actualSuccessCallback, httpBody;
+  let actualSuccessCallback, httpBody, actualUrl;
   mock('sendHttpRequest', (postUrl, response, options, body) => {
+    actualUrl = postUrl;
     actualSuccessCallback = response;
     httpBody = body;
     actualSuccessCallback(200, {}, '');
